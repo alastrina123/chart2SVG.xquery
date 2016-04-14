@@ -58,13 +58,35 @@ declare function local:svgTITLE($TITLE)
     }
 };
 
-declare function local:svgPATH($pathCOL, $pathSTRK, $dXcoord, $dYcoord)
+declare function local:svgPATH($pathID,$pathCOL, $pathSTRK, $dXcoord, $dYcoord)
     {element path
-        {attribute stroke {$pathCOL},
+        {attribute id {$pathID},
+         attribute stroke {$pathCOL},
          attribute stroke-width {$pathSTRK},
          attribute fill {'none'},
-         attribute d {for $pts at $idx in $dXcoord return
-                        concat(if ($idx=1) then 'M' else 'L',' ',$dXcoord[$idx],' ',$dYcoord[$idx])}
+         attribute d {
+            if (contains($pathID,'smooth'))
+            then let $count := 0
+            for sliding window $xW in ($dXcoord)
+                start at $pt0 when fn:true()
+                only end at $pt2 when $pt2 - $pt0 eq 2
+
+                let $x0 := $xW[1]
+                let $x1 := $xW[2]
+                let $x2 := $xW[3]
+                let $y0 := $dYcoord[$pt0]
+                let $y1 := $dYcoord[$pt0 + 1]
+                let $y2 := $dYcoord[$pt0 + 2]         
+                let $tFACT := 1 div 3
+                let $Dp0p1 := math:pow(math:pow($x1 - $x0, 2) + math:pow($y1 - $y0, 2), 0.5)
+                let $Dp1p2 := math:sqrt(math:pow($x2 - $x1,2) + math:pow($y2 - $y1,2))
+                let $C1x := $x1 - (($Dp0p1 div ($Dp0p1 + $Dp1p2)) * ($x2 - $x0) * $tFACT)
+                let $C1y := $y1 - (($Dp0p1 div ($Dp0p1 + $Dp1p2)) * ($y2 - $y0) * $tFACT)
+                let $C2x := $x1 + (($Dp1p2 div ($Dp0p1 + $Dp1p2)) * ($x2 - $x0) * $tFACT)
+                let $C2y := $y1 + (($Dp1p2 div ($Dp0p1 + $Dp1p2)) * ($y2 - $y0) * $tFACT)
+                return if ($pt0 eq 1) then concat('M',$x0,' ',$y0,'Q') else concat(' ',$C1x,' ',$C1y,' ',$x1,' ',$y1,' ', if ($pt2 eq count($dYcoord)) then concat('Q',$C2x,' ',$C2y,' ',$x2,' ',$y2) else concat('C',$C2x,' ',$C2y))
+            else for $pts at $idx in $dXcoord
+            return concat(if ($idx=1) then 'M' else 'L',' ',$dXcoord[$idx],' ',$dYcoord[$idx])}
     }
 };
 
@@ -80,15 +102,16 @@ declare function local:svgRECT($rectXorg,$rectYorg,$rectWD,$rectHT,$rectFILLcol,
     }
 };
 
-declare function local:svgTEXT($txtSTYLE, $txtFONT, $txtSIZE, $txtCOL,$txtXpos,$txtYpos,$txtLINE,$textSOURCE)
+declare function local:svgTEXT($textID,$txtSTYLE, $txtFONT, $txtSIZE, $txtCOL,$txtXpos,$txtYpos,$txtLINE)
     {element text
-        {attribute x {$txtXpos},
+        {attribute id {$textID},
+        attribute x {$txtXpos},
         attribute y {$txtYpos},
         attribute style {$txtSTYLE},
         attribute font-family {$txtFONT},
         attribute font-size {$txtSIZE * $ptCMfactor},
         attribute fill {$txtCOL},
-        if ($textSOURCE = "textbox" or $textSOURCE = "axistitle") then
+        if (contains($textID,'txtbox') or contains($textID,'axtitle')) then
             for $txtRUN in $txtLINE/a:r
             return
         element tspan
@@ -188,6 +211,7 @@ element svgs
                 else ($plotYOrig + ($gridLINE div $gridCOUNT * $plotAREAht),$plotYOrig + ($gridLINE div $gridCOUNT * $plotAREAht))
 
                 return (local:svgPATH(
+                        concat('grid_',$AXES/c:axPos/@val,'_S',$logSTEP,'_L',$gridLINE),
                         $gridCOL,
                         try {$pathSTRK div 2} catch * {0.2},
                         switch ($AXES/c:axPos/@val)
@@ -199,6 +223,7 @@ element svgs
                         ),
                         if ($gridLINE mod $lineLABEL eq 0) then
                             local:svgTEXT(
+                            concat('axlabel_',$AXES/c:axPos/@val,'_S',$logSTEP,'_L',$gridLINE),
                             switch ($AXES/c:axPos/@val)
                             case "b" return 'text-anchor: middle'
                             case "l" return 'text-anchor: end'
@@ -218,35 +243,44 @@ element svgs
                             switch (boolean($chartFILE//c:valAx//c:logBase))
                             case false() return($axMIN  + ($gridLINE * $axMINOR)) cast as xs:float 
                             case true() return(math:exp10($logSTEP + math:log10($axMIN))) cast as xs:float
-                            default return (),
-                            'axislabel'
+                            default return ()
                             )
                         else ()
                         ),
                     for $txtLINE at $lineNUM in $AXES/c:title//a:p
                         return local:svgTEXT(
-                        'text-anchor: middle',
+                        concat('axtitle_',$AXES/c:axPos/@val, $lineNUM),
+                        switch ($AXES/c:axPos/@val)
+                        case "b" return 'text-anchor: middle'
+                        case "l" return 'text-anchor: end'
+                        case "r" return 'text-anchor: start'
+                        default return 'text-anchor: start',
                         $stdFONT,
                         try {$stdFONTptSZ} catch * {$txtLINE[$lineNUM]//a:rPr[1]/@sz div 100 cast as xs:decimal},
                         $stdFONTcol,
                         $AXES/c:title/c:layout/c:manualLayout/c:x/@val * $chartAREAwd,
                         $AXES/c:title/c:layout/c:manualLayout/c:y/@val * $chartAREAht + ((try {$stdFONTptSZ} catch * {$txtLINE[$lineNUM]//a:rPr//@sz div 100 cast as xs:decimal}) * $ptCMfactor * ($lineNUM - 1)),
-                        $txtLINE,
-                        'axistitle')
+                        $txtLINE)
                  ),
                  for $scatterSERIES at $scatterIDX in $chartFILE//c:scatterChart
                     let $yValIDX := $scatterIDX * 2
                     return
-                    for $pathSERIES at $pathIDX in $scatterSERIES/c:ser[not(descendant::c:ptCount[not(ancestor::c:strCache)]/@val = "1")]
-                    return local:svgPATH(
-                    try {$pathCOL} catch * {'black'},
-                    $pathSTRK,
-                    for $pathX in $pathSERIES/c:xVal//c:v
-                    let $pathXcoords := $plotXOrig + (($pathX - $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data()) * ($plotAREAwd div ($chartFILE//c:valAx[1]/c:scaling/c:max/@val/data() - $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data())))
-                    return $pathXcoords,
-                    for $pathY in $pathSERIES/c:yVal//c:v
-                    let $pathYcoords := $plotYOrig + (($pathY - $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data()) * ($plotAREAht div ($chartFILE//c:valAx[$yValIDX]/c:scaling/c:max/@val/data() - $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data())))
-                    return $pathYcoords
+                        for $pathSERIES at $pathIDX in $scatterSERIES/c:ser[not(descendant::c:ptCount[not(ancestor::c:strCache)]/@val = "1")]
+                        let $pathTYPE := if ($pathSERIES//c:smooth/@val = 1) then 'smooth_' else 'straight_'
+                        return local:svgPATH(
+                        concat('PATH_',$pathTYPE,$scatterIDX),
+                        try {$pathCOL} catch * {'black'},
+                        $pathSTRK,
+                        for $pathX in $pathSERIES/c:xVal//c:v
+                        let $pathXcoords := if ($chartFILE//c:valAx//c:logBase)
+                        then $plotXOrig + ((math:log10($pathX div $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data()) * ($plotAREAwd div (math:log10($chartFILE//c:valAx[1]/c:scaling/c:max/@val/data() div $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data())))))
+                        else $plotXOrig + (($pathX - $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data()) * ($plotAREAwd div ($chartFILE//c:valAx[1]/c:scaling/c:max/@val/data() - $chartFILE//c:valAx[1]/c:scaling/c:min/@val/data())))
+                        return $pathXcoords,
+                        for $pathY in $pathSERIES/c:yVal//c:v
+                        let $pathYcoords :=  if ($chartFILE//c:valAx//c:logBase)
+                        then $plotYOrig + ((math:log10($pathY div $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data()) * ($plotAREAht div (math:log10($chartFILE//c:valAx[$yValIDX]/c:scaling/c:max/@val/data() div $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data())))))
+                        else $plotYOrig + (($pathY - $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data()) * ($plotAREAht div ($chartFILE//c:valAx[$yValIDX]/c:scaling/c:max/@val/data() - $chartFILE//c:valAx[$yValIDX]/c:scaling/c:min/@val/data())))
+                        return $pathYcoords
                ),
     for $plotDIMS in $chartFILE//c:plotArea
     return local:svgRECT(
@@ -265,7 +299,7 @@ element svgs
         where doc-available($chartRELS) eq true()
     
         let $chartDWGS := concat(substring-before(document-uri($chartFILE),'charts/'),substring-after(doc($chartRELS)/rels:Relationships/rels:Relationship[@Id=$UshapesID]/@Target/data(),'../')) cast as xs:anyURI   
-        for $txtBOX in doc($chartDWGS)//cdr:relSizeAnchor[*//a:r/a:t]
+        for $txtBOX at $txtBOXnum in doc($chartDWGS)//cdr:relSizeAnchor[*//a:r/a:t]
         where $txtBOX//@txBox eq '1'
 
         let $txtBOXx0 := $txtBOX/cdr:from/cdr:x * $chartAREAwd
@@ -285,14 +319,14 @@ element svgs
 
             for $txtLINE at $lineNUM in $txtBOX//a:p
                 return local:svgTEXT(
+                concat('txtbox_',$txtBOXnum),
                 'text-anchor: middle',
                 $stdFONT,
                 try {$stdFONTptSZ} catch * {$txtLINE[$lineNUM]//a:rPr[1]/@sz div 100 cast as xs:decimal},
                 $stdFONTcol,
                 $txtPOSx,
                 $txtPOSy + ((try {$stdFONTptSZ} catch * {$txtLINE[$lineNUM]//a:rPr//@sz div 100 cast as xs:decimal}) * $ptCMfactor * ($lineNUM - 1)),
-                $txtLINE,
-                'textbox')
+                $txtLINE)
          )
     }
 }
